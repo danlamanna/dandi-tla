@@ -11,16 +11,16 @@ VARIABLES
     db_assets,
     loaded_asset,
     validate_queue,
+    validatable_assets,
     \* keep the model running in a reasonable time
     bounded_actions
 
 AssetStates == {"none", "pending", "valid", "invalid"}
 --------------------------------------------------------------
-vars == <<pc, db_assets, bounded_actions, loaded_asset, validate_queue>>
+vars == <<pc, db_assets, bounded_actions, loaded_asset, validate_queue, validatable_assets>>
 ---------------------------------------------------------------
 AssetChangesIncreaseRevision(asset) ==
-    /\ (\/ asset.status # asset'.status
-        \/ asset.sha256 # asset'.sha256) => asset'.rev = asset.rev + 1
+    /\ asset.status # asset'.status => asset'.rev = asset.rev + 1
 
 RevisionFieldIsMonotonicallyIncreasing(record) ==
     /\ record'.rev = record.rev \/ record'.rev = record.rev + 1
@@ -62,91 +62,69 @@ AddAssetToVersion(t, aid) ==
     /\ db_assets[aid].status = "none"
     /\ db_assets' = [db_assets EXCEPT ![aid]["status"] = "pending",
                                       ![aid]["rev"] = @ + 1]
-    /\ loaded_asset' = [loaded_asset EXCEPT ![t] = <<aid, db_assets'[aid]>>]
-    /\ UNCHANGED <<bounded_actions, validate_queue, pc>>
+    /\ UNCHANGED <<bounded_actions, validate_queue, pc, loaded_asset, validatable_assets>>
 
-CalculateSha256(t, aid) ==
-    \* can be called repeatedly (if other identical blobs were to get uploaded)
-    /\ db_assets[aid].sha256 = NULL
-    /\ bounded_actions[t].checksums > 0
-    /\ pc[t] = ""
-    /\ db_assets[aid].status # "none"
-    /\ db_assets' = [db_assets EXCEPT ![aid]["sha256"] = "1",
-    \* cheat because this can't override asset stuff because the blob is stored
-    \* in a separate table
-                                      ![aid]["rev"] = db_assets[aid].rev + 1]
-    /\ bounded_actions' = [bounded_actions EXCEPT ![t]["checksums"] = @ - 1]
-    /\ UNCHANGED <<loaded_asset, pc, validate_queue>>
-
-\* this can happen at any time since blob upload triggers it for every asset
-\* that blob maps to.
 ValidateAssetMetadata(t, aid) ==
-    LET
-        asset == ASSETS[aid]
-    IN
-    /\ pc[t] = ""
-    /\ aid \in validate_queue
-    \* TODO: simulate this no-oping because of optimistic lock?
-    /\ bounded_actions[t].asset_validations > 0
-    /\ db_assets' = [db_assets EXCEPT ![aid]["status"] = IF asset.sha256 # NULL THEN "valid" ELSE "invalid",
-                                      ![aid]["rev"] = asset.rev + 1]
-    /\ bounded_actions' = [bounded_actions EXCEPT ![t]["asset_validations"] = @ - 1]
-    /\ validate_queue' = validate_queue \ {aid}
-    /\ UNCHANGED <<pc, loaded_asset>>
-
-ValidateAssetMetadataCron(t, aid) ==
     LET
         asset == db_assets[aid]
     IN
     /\ pc[t] = ""
-    /\ asset.status = "pending"
-    \* TODO: simulate this no-oping because of optimistic lock?
+    /\ aid \in validate_queue
     /\ bounded_actions[t].asset_validations > 0
-    /\ db_assets' = [db_assets EXCEPT ![aid]["status"] = IF asset.sha256 # NULL THEN "valid" ELSE "invalid",
+    \* TODO or INVALID
+    /\ db_assets' = [db_assets EXCEPT ![aid]["status"] = "valid",
                                       ![aid]["rev"] = asset.rev + 1]
     /\ bounded_actions' = [bounded_actions EXCEPT ![t]["asset_validations"] = @ - 1]
-    /\ UNCHANGED <<pc, loaded_asset, validate_queue>>
+    /\ validate_queue' = validate_queue \ {aid}
+    /\ UNCHANGED <<pc, loaded_asset, validatable_assets>>
+
+ValidateAssetMetadataCronPart1(t) ==
+    /\ pc[t] = ""
+    /\ bounded_actions[t].cron_ticks > 0
+    /\ validatable_assets' = [validatable_assets EXCEPT ![t] = {a \in DOMAIN db_assets: db_assets[a].status = "pending"}]
+    /\ bounded_actions' = [bounded_actions EXCEPT ![t]["cron_ticks"] = @ - 1]
+    /\ pc' = [pc EXCEPT ![t] = "ValidateAssetMetadataCronPart1"]
+    /\ UNCHANGED <<loaded_asset, validate_queue, db_assets>>
+
+ValidateAssetMetadataCronPart2(t) ==
+    /\ pc[t] = "ValidateAssetMetadataCronPart1"
+    /\ validate_queue' = validate_queue \union validatable_assets[t]
+    /\ pc' = [pc EXCEPT ![t] = ""]
+    /\ UNCHANGED <<loaded_asset, validatable_assets, db_assets, bounded_actions>>
 
 ---------------------------------------------------------------------------------
 Init == /\ pc = [t \in 1..NUM_ACTORS |-> ""]
         /\ loaded_asset = [t \in 1..NUM_ACTORS |-> NULL]
-        /\ bounded_actions = [t \in 1..NUM_ACTORS |-> [asset_validations |-> 2, checksums |-> 2]]
+        /\ validatable_assets = [t \in 1..NUM_ACTORS |-> {}]
+        /\ bounded_actions = [t \in 1..NUM_ACTORS |-> [asset_validations |-> 2,
+                                                       cron_ticks |-> 3]]
         /\ db_assets = [aid \in ASSETS |-> [status |-> "none",
-                                            rev |-> 0,
-                                            sha256 |-> NULL,
-                                            blob |-> NULL]]
+                                            rev |-> 0]]
         /\ validate_queue = {}
 
 
 Next == \/ \E t \in 1..NUM_ACTORS:
+              \* cron
+              \/ ValidateAssetMetadataCronPart1(t)
+              \/ ValidateAssetMetadataCronPart2(t)
               \/ \E aid \in ASSETS:
                     \/ AddAssetToVersion(t, aid)
-                    \/ CalculateSha256(t, aid)
-                    \* cron
-                    \/ ValidateAssetMetadataCron(t, aid)
               \/ \E aid \in validate_queue:
                     \/ ValidateAssetMetadata(t, aid)
-\* request
 
 \* add workflow
 \* AddAssetToVersion - add pending asset to version
-\* takes that in memory asset and
-\* ValidateAssetMetadata if sha256 is set on the blob
 
-\* probably not worth modeling change workflow
-\* change workflow
-\* lock asset
-\* remove, then add
-
-\* remove workflow
+\* remove workflow (worth modeling? it only impacts the version really)
 \* RemoveAssetFromVersion locks asset, removes it, and sets version to pending
 
-\* worker
-
-\* calculate_sha256 workflow
+\* sha256 workflow (does this even need to exist? nothing refs it but validation and that's opaque to us)
 \* save asset 256
-\* queue up validateassetmetadata on asset_id
 
+\* validate workflow
+\* 1. load an asset that's pending and has a sha256
+\* 2. check if loaded asset is not published
+\* 3. set loaded asset to valid or invalid
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 =====================================================
