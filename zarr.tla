@@ -1,4 +1,10 @@
 ---------------------- MODULE zarr ----------------------
+(*
+This spec models the lifecycle of a Zarr archive, from creation to ingestion.
+It constrains the valid state transitions and ensures there are no lost updates.
+
+It's updated to dandi-archive 83d0c44e.
+*)
 EXTENDS Naturals, Sequences, TLC, FiniteSets
 
 CONSTANTS ZARRS, NUM_ACTORS, NULL
@@ -13,7 +19,7 @@ VARIABLES
     \* keep the model running in a reasonable time
     bounded_actions
 
-ZarrStates == {"none", "pending", "ingesting", "complete"}
+ZarrStates == {"none", "pending", "uploaded", "ingesting", "complete"}
 --------------------------------------------------------------
 vars == <<zarrs, bounded_actions, ram, pc>>
 ---------------------------------------------------------------
@@ -32,7 +38,8 @@ ZarrStateTransitions == [][
         /\ zarrs[zid].status # zarrs[zid]'.status => zarrs[zid]'.rev = zarrs[zid].rev + 1
 
         /\ zarrs[zid].status = "none" => zarrs[zid]'.status \in {"none", "pending"}
-        /\ zarrs[zid].status = "pending" => zarrs[zid]'.status \in {"pending", "ingesting"}
+        /\ zarrs[zid].status = "pending" => zarrs[zid]'.status \in {"pending", "uploaded"}
+        /\ zarrs[zid].status = "uploaded" => zarrs[zid]'.status \in {"ingesting", "uploaded"}
         /\ zarrs[zid].status = "ingesting" => zarrs[zid]'.status \in {"ingesting", "complete"}
         \* can only go to ingesting because of force ingestion
         \* TODO - better way of representing this?
@@ -49,7 +56,7 @@ CreateZarrArchive(zid) ==
     /\ UNCHANGED <<ram, bounded_actions, pc>>
 
 RequestSignedUrls(zid) ==
-    /\ ~zarrs[zid].status \in {"none", "ingesting"}
+    /\ ~zarrs[zid].status \in {"none", "ingesting", "uploaded"}
     /\ bounded_actions.request_urls > 0
     /\ zarrs' = [zarrs EXCEPT ![zid]["status"] = "pending",
                               ![zid]["rev"] = @ + 1]
@@ -57,17 +64,25 @@ RequestSignedUrls(zid) ==
     /\ UNCHANGED <<ram, pc>>
 
 DeleteZarrFiles(zid) ==
-    /\ ~zarrs[zid].status \in {"none", "ingesting"}
+    /\ ~zarrs[zid].status \in {"none", "ingesting", "uploaded"}
     /\ bounded_actions.deletes > 0
     /\ zarrs' = [zarrs EXCEPT ![zid]["status"] = "pending",
                               ![zid]["rev"] = @ + 1]
     /\ bounded_actions' = [bounded_actions EXCEPT !.deletes = @ - 1]
     /\ UNCHANGED <<ram, pc>>
 
-IngestZarrArchivePart1(t, zid, force) ==
+FinalizeZarrArchive(zid) ==
+    /\ zarrs[zid].status # "none"
+    /\ zarrs[zid].status = "pending"
+    /\ zarrs' = [zarrs EXCEPT ![zid]["status"] = "uploaded",
+                              ![zid]["rev"] = @ + 1]
+    /\ UNCHANGED <<ram, bounded_actions, pc>>
+
+\* TODO: model the force parameter
+IngestZarrArchivePart1(t, zid) ==
     /\ zarrs[zid].status # "none"
     /\ pc[t] = NULL
-    /\ zarrs[zid].status = "pending" \/ force
+    /\ zarrs[zid].status = "uploaded"
     /\ bounded_actions.ingests > 0
     /\ zarrs' = [zarrs EXCEPT ![zid]["status"] = "ingesting",
                               ![zid]["rev"] = @ + 1]
@@ -77,9 +92,6 @@ IngestZarrArchivePart1(t, zid, force) ==
 
 IngestZarrArchivePart2(t) ==
     /\ pc[t] = "part2"
-    \* this is equivalent to just adding:
-    \* asset zarr.status == ZarrArchiveStatus.INGESTING in part 2 of ingest_zarr_archive
-    \* TODO
     /\ zarrs[ram[t]].status = "ingesting"
     /\ bounded_actions.ingests_two > 0
     /\ zarrs' = [zarrs EXCEPT ![ram[t]]["status"] = "complete",
@@ -97,11 +109,9 @@ Next == \/ \E t \in 1..NUM_ACTORS:
               \E zid \in ZARRS:
                  \/ CreateZarrArchive(zid)
                  \/ RequestSignedUrls(zid)
-                 \* Note that Finalize isn't modeled. All it does is kick off ingestion and doesn't mutate
-                 \* state so there's nothing that can really break from it.
+                 \/ FinalizeZarrArchive(zid)
                  \/ DeleteZarrFiles(zid)
-                 \/ \E force \in BOOLEAN:
-                     \/ IngestZarrArchivePart1(t, zid, force)
+                 \/ IngestZarrArchivePart1(t, zid)
                  \/ IngestZarrArchivePart2(t)
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
