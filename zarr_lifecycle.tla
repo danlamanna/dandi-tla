@@ -1,4 +1,4 @@
----------------------- MODULE zarr ----------------------
+---------------------- MODULE zarr_lifecycle ----------------------
 (*
 This spec models the lifecycle of a Zarr archive, from creation to ingestion.
 It constrains the valid state transitions and ensures there are no lost updates.
