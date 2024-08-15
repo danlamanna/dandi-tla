@@ -30,3 +30,7 @@
 *.log
 
 states
+*.out
+
+# graphviz outputs
+*.dot
