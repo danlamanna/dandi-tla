@@ -41,13 +41,18 @@ ZarrStateTransitions == [][
         /\ zarrs[zid].status = "pending" => zarrs[zid]'.status \in {"pending", "uploaded"}
         /\ zarrs[zid].status = "uploaded" => zarrs[zid]'.status \in {"ingesting", "uploaded"}
         /\ zarrs[zid].status = "ingesting" => zarrs[zid]'.status \in {"ingesting", "complete"}
-        \* can only go to ingesting because of force ingestion
-        \* TODO - better way of representing this?
-        /\ zarrs[zid].status = "complete" => zarrs[zid]'.status \in {"complete", "pending", "ingesting"}
+        /\ zarrs[zid].status = "complete" => zarrs[zid]'.status \in {"complete", "pending"}
 ]_zarrs
 
-ZarrProcessed == <>[](\A zid \in ZARRS:
-                        zarrs[zid].status # "none")
+
+(*
+The way this works is maybe hacky, I think. The transitions from complete -> pending are
+under bounded_actions, so they can only happen a finite amount of times. But the actions going
+from uploaded -> complete are unbounded, so it's always possible to get to complete and stay
+there.
+*)
+ZarrProcessed == [](\A zid \in ZARRS:
+                        zarrs[zid].status = "uploaded" ~> zarrs[zid].status = "complete")
 ------------------------------------------------------------------
 CreateZarrArchive(zid) ==
     /\ zarrs[zid].status = "none"
@@ -83,26 +88,24 @@ IngestZarrArchivePart1(t, zid) ==
     /\ zarrs[zid].status # "none"
     /\ pc[t] = NULL
     /\ zarrs[zid].status = "uploaded"
-    /\ bounded_actions.ingests > 0
     /\ zarrs' = [zarrs EXCEPT ![zid]["status"] = "ingesting",
                               ![zid]["rev"] = @ + 1]
     /\ pc' = [pc EXCEPT ![t] = "part2"]
-    /\ bounded_actions' = [bounded_actions EXCEPT !.ingests = @ - 1]
     /\ ram' = [ram EXCEPT ![t] = zid]
+    /\ UNCHANGED <<bounded_actions>>
 
 IngestZarrArchivePart2(t) ==
     /\ pc[t] = "part2"
     /\ zarrs[ram[t]].status = "ingesting"
-    /\ bounded_actions.ingests_two > 0
     /\ zarrs' = [zarrs EXCEPT ![ram[t]]["status"] = "complete",
                               ![ram[t]]["rev"] = @ + 1]
-    /\ bounded_actions' = [bounded_actions EXCEPT !.ingests_two = @ - 1]
     /\ ram' = [ram EXCEPT ![t] = NULL]
     /\ pc' = [pc EXCEPT ![t] = NULL]
+    /\ UNCHANGED <<bounded_actions>>
 ---------------------------------------------------------------------------------
 Init == /\ ram = [t \in 1..NUM_ACTORS |-> NULL]
         /\ pc = [t \in 1..NUM_ACTORS |-> NULL]
-        /\ bounded_actions = [request_urls |-> 4, ingests |-> 4, ingests_two |-> 4, deletes |-> 4]
+        /\ bounded_actions = [request_urls |-> 4, deletes |-> 4]
         /\ zarrs = [zid \in ZARRS |-> [status |-> "none", rev |-> 0]]
 
 Next == \/ \E t \in 1..NUM_ACTORS:
