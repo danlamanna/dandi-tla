@@ -1,0 +1,7 @@
+stateDiagram-v2
+    [*] --> pending: CreateZarrArchive
+    pending --> uploaded: FinalizeZarrArchive
+    pending --> pending: ChangeZarrArchive
+    uploaded --> ingesting: IngestZarrArchivePart1
+    ingesting --> complete: IngestZarrArchivePart2
+    complete --> pending: ChangeZarrArchive
