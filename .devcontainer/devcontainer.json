@@ -1,0 +1,19 @@
+{
+	"name": "dandi-tla",
+	"image": "mcr.microsoft.com/devcontainers/java:1-21-bullseye",
+	"features": {
+		"ghcr.io/devcontainers/features/java:1": {
+			"version": "17"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"tlaplus.vscode-ide"
+			],
+			"settings": {
+				"tlaplus.java.home": ""
+			}
+		}
+	}
+}
