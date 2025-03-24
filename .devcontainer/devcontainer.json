@@ -12,7 +12,8 @@
 				"tlaplus.vscode-ide"
 			],
 			"settings": {
-				"tlaplus.java.home": ""
+				"tlaplus.java.home": "",
+				"tlaplus.tlc.modelChecker.optionsPrompt": false
 			}
 		}
 	}
