@@ -1,11 +1,6 @@
 {
 	"name": "dandi-tla",
-	"image": "mcr.microsoft.com/devcontainers/java:1-21-bullseye",
-	"features": {
-		"ghcr.io/devcontainers/features/java:1": {
-			"version": "17"
-		}
-	},
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu",
 	"customizations": {
 		"vscode": {
 			"extensions": [
@@ -16,5 +11,8 @@
 				"tlaplus.tlc.modelChecker.optionsPrompt": false
 			}
 		}
-	}
+	},
+	// using a base image and a custom onCreateCommand avoids the entire default
+	// set of java extensions the java image and feature both include.
+	"onCreateCommand": "sudo apt-get update && sudo apt-get install -y default-jre",
 }
